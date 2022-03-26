@@ -1,24 +1,31 @@
 
 #include <mpi.h>
 #include <unistd.h>
-#include <stdio.h>
+#include<stdio.h>
 
-// Number of tasks assigned to a worker each time it's available
-int const TASK_PACKET_SIZE = 3;
+// Number of tasks assigned at once
+int const TASK_PACKET_SIZE = 1;
 
 // Different message tags
-int const TAG_WORK_REQUEST = 1,
-          TAG_WORK_SEND    = 2;
+int const TAG_WORK_REQUEST = 1, // Workers requesting work
+          TAG_WORK_BRIEF   = 2, // Controller sending work
+          TAG_SUM_RETURN   = 3; // Workers returning the sum of all completed calculations
 
-// Signal to finish working
-int const SIGNAL_TERMINATE = -1;
+// Signal to workers that there are no more tasks
+int const SIGNAL_COMPLETE = -1;
 
 int calculate(int input)
 {
-    sleep(1);
-    return input;
+    usleep(0.1f * 1000000);
+    return 1;
 }
 
+/**
+ * Main execution for authoritative process
+ * @param processes total number of assigned processes
+ * @param min minimum value for calculation range
+ * @param max maximum value for calculation range
+ */
 void controller(int processes, int min, int max)
 {
     printf("[CONTROLLER] Starting\n");
@@ -32,7 +39,7 @@ void controller(int processes, int min, int max)
         MPI_Recv(&workerRank, 1, MPI_INT, MPI_ANY_SOURCE, TAG_WORK_REQUEST, MPI_COMM_WORLD, &status);
 
         // Send work details back to worker
-        MPI_Send(&i, 1, MPI_INT, workerRank, TAG_WORK_SEND, MPI_COMM_WORLD);
+        MPI_Send(&i, 1, MPI_INT, workerRank, TAG_WORK_BRIEF, MPI_COMM_WORLD);
     }
 
     // Tell all workers to finish
@@ -44,14 +51,28 @@ void controller(int processes, int min, int max)
         MPI_Recv(&workerRank, 1, MPI_INT, MPI_ANY_SOURCE, TAG_WORK_REQUEST, MPI_COMM_WORLD, &status);
 
         // Tell worker to finish
-        MPI_Send(&SIGNAL_TERMINATE, 1, MPI_INT, workerRank, TAG_WORK_SEND, MPI_COMM_WORLD);
+        MPI_Send(&SIGNAL_COMPLETE, 1, MPI_INT, workerRank, TAG_WORK_BRIEF, MPI_COMM_WORLD);
     }
 
-    printf("[CONTROLLER] Finished\n");
+    // Collect worker sums
+    int const reductionInput = 0; // Required for reduction
+    int sum;
+    MPI_Reduce(&reductionInput, &sum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    printf("[CONTROLLER] Sum: %d\n", sum);
 }
 
+/**
+ * Main execution for worker processes
+ * @param rank MPI rank of running process
+ * @param min minimum value for calculation range
+ * @param max maximum value for calculation range
+ */
 void worker(int rank, int min, int max)
 {
+    // Sum up each calculation to return at end
+    int sum = 0;
+
     while (1)
     {
         // Send task request
@@ -60,18 +81,22 @@ void worker(int rank, int min, int max)
         // Recieve task details
         int taskMin;
         MPI_Status status;
-        MPI_Recv(&taskMin, 1, MPI_INT, 0, TAG_WORK_SEND, MPI_COMM_WORLD, &status);
+        MPI_Recv(&taskMin, 1, MPI_INT, 0, TAG_WORK_BRIEF, MPI_COMM_WORLD, &status);
 
         // Check done
-        if (taskMin==SIGNAL_TERMINATE)
+        if (taskMin==SIGNAL_COMPLETE)
             break;
 
         // Perform work on task range
         int taskMax = max<(taskMin+TASK_PACKET_SIZE-1) ? max : (taskMin+TASK_PACKET_SIZE-1);
         printf("Calculating for range %d-%d\n", taskMin, taskMax);
         for (int i=taskMin; i<=taskMax; i++)
-            calculate(i);
+            sum += calculate(i);
     }
+
+    // Return calculation sum
+    int reductionOutput; // Required for reduction
+    MPI_Reduce(&sum, &reductionOutput, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 }
 
 int main(int argc, char **argv)
@@ -85,7 +110,7 @@ int main(int argc, char **argv)
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     // Run
-    int min=0, max=10;
+    int min=0, max=10000;
     if (rank==0)
         controller(processes, min, max);
     else
