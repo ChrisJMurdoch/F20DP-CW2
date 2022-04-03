@@ -102,6 +102,21 @@ void worker(int min, int max)
 }
 
 /**
+ * Main execution path when only one process has been allocated
+ * Controller-Worker method only works with a minimum of 2 processes
+ * @param min minimum value for calculation range
+ * @param max maximum value for calculation range
+ */
+long sequential(long min, long max)
+{
+    // Sum totient for each value in given range
+    int sum = 0;
+    for (int i=min; i<=max; i++)
+        sum += eulerTotient(i);
+    return sum;
+}
+
+/**
  * Measure the duration of calling the given function with given arguments
  * @param func Function to be called
  * @param argA First argument
@@ -142,12 +157,22 @@ int main(int argc, char **argv)
     int const min = argc>=2 ? atoi(argv[1]) : 1,
               max = argc>=3 ? atoi(argv[2]) : 15000;
 
-    // Run controller or worker role depending on rank
-    int rank;
+    // Get MPI data for this process
+    int rank, processes;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    if (rank==0)
+    MPI_Comm_size(MPI_COMM_WORLD, &processes);
+
+    // Run depending on process configuration
+    if (processes==1)
+        // Sequential operation
+        duration(sequential, min, max, true);
+
+    else if (rank==0)
+        // Parallel operation - Authoritative process
         duration(controller, min, max, true);
+
     else
+        // Parallel operation - Worker process
         worker(min, max);
 
     // Finalise MPI
