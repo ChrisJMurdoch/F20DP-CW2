@@ -1,1 +1,1 @@
-mpirun -n $1 ./mpi_euler
+mpirun -n $1 ./mpi_euler $2 $3

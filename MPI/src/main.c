@@ -1,10 +1,17 @@
 
+// Author: Christopher Murdoch
+// Partially written for CW1 and partially for CW2
+
+#include "../include/math.h"
+
 #include <mpi.h>
-#include <unistd.h>
-#include<stdio.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <stdbool.h>
 
 // Number of tasks assigned at once
-int const TASK_PACKET_SIZE = 1;
+int const TASK_PACKET_SIZE = 10;
 
 // Different message tags
 int const TAG_WORK_REQUEST = 1, // Workers requesting work
@@ -14,22 +21,13 @@ int const TAG_WORK_REQUEST = 1, // Workers requesting work
 // Signal to workers that there are no more tasks
 int const SIGNAL_COMPLETE = -1;
 
-int calculate(int input)
-{
-    usleep(0.1f * 1000000);
-    return 1;
-}
-
 /**
- * Main execution for authoritative process
- * @param processes total number of assigned processes
+ * Main execution path for authoritative process
  * @param min minimum value for calculation range
  * @param max maximum value for calculation range
  */
-void controller(int processes, int min, int max)
+long controller(long min, long max)
 {
-    printf("[CONTROLLER] Starting\n");
-
     // Distribute tasks until depleted
     for (int i=min; i<=max; i+=TASK_PACKET_SIZE)
     {
@@ -43,6 +41,8 @@ void controller(int processes, int min, int max)
     }
 
     // Tell all workers to finish
+    int processes;
+    MPI_Comm_size(MPI_COMM_WORLD, &processes);
     for (int i=1; i<processes; i++)
     {
         // Get work request from any worker
@@ -58,21 +58,24 @@ void controller(int processes, int min, int max)
     int const reductionInput = 0; // Required for reduction
     int sum;
     MPI_Reduce(&reductionInput, &sum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    printf("[CONTROLLER] Sum: %d\n", sum);
+    return sum;
 }
 
 /**
- * Main execution for worker processes
- * @param rank MPI rank of running process
+ * Main execution path for worker processes
  * @param min minimum value for calculation range
  * @param max maximum value for calculation range
  */
-void worker(int rank, int min, int max)
+void worker(int min, int max)
 {
-    // Sum up each calculation to return at end
+    // Get MPI rank
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    
+    // Sum up each calculation to reduce once finished
     int sum = 0;
 
+    // Work until done
     while (1)
     {
         // Send task request
@@ -89,9 +92,8 @@ void worker(int rank, int min, int max)
 
         // Perform work on task range
         int taskMax = max<(taskMin+TASK_PACKET_SIZE-1) ? max : (taskMin+TASK_PACKET_SIZE-1);
-        printf("Calculating for range %d-%d\n", taskMin, taskMax);
         for (int i=taskMin; i<=taskMax; i++)
-            sum += calculate(i);
+            sum += eulerTotient(i);
     }
 
     // Return calculation sum
@@ -99,22 +101,54 @@ void worker(int rank, int min, int max)
     MPI_Reduce(&sum, &reductionOutput, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 }
 
+/**
+ * Measure the duration of calling the given function with given arguments
+ * @param func Function to be called
+ * @param argA First argument
+ * @param argB Second argument
+ * @param verbose Print output to console
+ * @return Duration of call
+ */
+double duration(long (*func)(long, long), long argA, long argB, bool verbose)
+{
+    // Record timestamps immediately before and after function execution
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+    long result = (*func)(argA, argB);
+    gettimeofday(&end, NULL);
+
+    // Calculate duration
+    double duration = (end.tv_sec-start.tv_sec) + ((end.tv_usec - start.tv_usec) / 1000000.0);
+    if (verbose)
+        printf("∑Φ[%lu-%lu]=%lu took %f seconds.\n", argA, argB, result, duration);
+    
+    return duration;
+}
+
+/**
+ * Calculate and profile Euler Totient Sum for given range
+ * @param argv[0] Lower value for range to be calculated - defaults to 1
+ * @param argv[1] Upper value for range to be calculated - defaults to 15,000
+ */
 int main(int argc, char **argv)
 {
     // Initialise MPI
     MPI_Init(&argc, &argv);
 
-    // Get process data
-    int processes, rank;
-    MPI_Comm_size(MPI_COMM_WORLD, &processes);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    // Initialise math library
+    initPrimeCache();
 
-    // Run
-    int min=0, max=10000;
+    // Parse inputs
+    int const min = argc>=2 ? atoi(argv[1]) : 1,
+              max = argc>=3 ? atoi(argv[2]) : 15000;
+
+    // Run controller or worker role depending on rank
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     if (rank==0)
-        controller(processes, min, max);
+        duration(controller, min, max, true);
     else
-        worker(rank, min, max);
+        worker(min, max);
 
     // Finalise MPI
     MPI_Finalize();

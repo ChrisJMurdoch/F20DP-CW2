@@ -1,1 +1,1 @@
-mpicc -o mpi_euler src/main.c
+mpicc -o mpi_euler src/main.c src/math.c
